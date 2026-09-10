@@ -7,7 +7,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import urllib.error
 import urllib.request
 
-GEMINI_API_KEY = "AQ.Ab8RN6J3EdKQvCjhGytddg2RFNDwADHaM9wW0M2e9bh_Cm4MfA"
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+
 CACHE_FILE = "cached_timetables.json"
 
 
@@ -1530,7 +1531,14 @@ Respond ONLY with JSON:
     req = urllib.request.Request(
         url,
         data=json.dumps(req_data).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+
+
+headers = {"Content-Type": "application/json"}
+if GEMINI_API_KEY.startswith("AQ."):
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent"
+    headers["Authorization"] = f"Bearer {GEMINI_API_KEY}"
+else:
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={GEMINI_API_KEY}"
         method="POST",
     )
     try:
