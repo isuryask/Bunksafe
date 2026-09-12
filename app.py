@@ -318,7 +318,7 @@ HTML_PAGE = """<!DOCTYPE html>
       <div class="dropzone-state-empty" id="uploadInitial">
         <div class="dz-icon">📷</div>
         <div class="dz-title">Upload Timetable Screenshot</div>
-        <div class="dz-sub">Extracts schedule & caches to Section Memory</div>
+        <div class="dz-sub">Extracts exact subjects & caches to Section Memory</div>
       </div>
       <div class="dropzone-state-loaded" id="uploadPreview">
         <img id="previewImg" class="dz-thumb" alt="Preview">
@@ -729,7 +729,7 @@ HTML_PAGE = """<!DOCTYPE html>
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        const MAX_WIDTH = 1100;
+        const MAX_WIDTH = 1200;
         let width = img.width;
         let height = img.height;
         if (width > MAX_WIDTH) {
@@ -740,7 +740,7 @@ HTML_PAGE = """<!DOCTYPE html>
         canvas.height = height;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, width, height);
-        callback(canvas.toDataURL('image/jpeg', 0.82).split(',')[1]);
+        callback(canvas.toDataURL('image/jpeg', 0.88).split(',')[1]);
       };
       img.src = e.target.result;
     };
@@ -774,7 +774,7 @@ HTML_PAGE = """<!DOCTYPE html>
 
     if (!activeTimetable && selectedBase64) {
       calcBtn.disabled = true;
-      statusEl.innerText = "Processing schedule grid...";
+      statusEl.innerText = "Extracting exact timetable cells with Gemini...";
       try {
         const dept = document.getElementById('deptInput').value.trim() || "ECE";
         const sec = document.getElementById('secInput').value.trim() || "Section C2";
@@ -784,11 +784,12 @@ HTML_PAGE = """<!DOCTYPE html>
           body: JSON.stringify({ image_b64: selectedBase64, department: dept, section: sec })
         });
         const data = await res.json();
+        if (!res.ok || data.error) throw new Error(data.error);
         activeTimetable = data.timetable;
         await loadSectionsList();
       } catch (err) {
         calcBtn.disabled = false;
-        statusEl.innerText = "Error: " + err.message;
+        statusEl.innerText = err.message;
         return;
       }
     }
@@ -969,56 +970,35 @@ HTML_PAGE = """<!DOCTYPE html>
 </html>
 """
 
-DEFAULT_SYLLABUS = {
-    "Monday": [
-        "Signals & Systems",
-        "Signals & Systems",
-        "Electromagnetic Fields",
-        "Digital Logic",
-        "Digital Logic Lab",
-    ],
-    "Tuesday": [
-        "Analog Circuits",
-        "Linear Integrated Circuits",
-        "Signals & Systems",
-        "Analog Circuits Lab",
-        "Analog Circuits Lab",
-    ],
-    "Wednesday": [
-        "Electromagnetic Fields",
-        "Analog Circuits",
-        "Digital Logic",
-        "Linear Integrated Circuits",
-        "Tutorial",
-    ],
-    "Thursday": [
-        "Digital Logic",
-        "Signals & Systems",
-        "Linear Integrated Circuits",
-        "Signals Lab",
-        "Signals Lab",
-    ],
-    "Friday": [
-        "Analog Circuits",
-        "Electromagnetic Fields",
-        "Signals & Systems",
-        "Digital Logic",
-        "Mentoring",
-    ],
-    "Saturday": [],
-}
-
 
 def extract_with_gemini(image_b64, dept, sec):
-  prompt = f"Extract weekly schedule JSON for Department '{dept}' Section '{sec}': keys Monday to Saturday."
+  prompt = f"""You are an expert OCR timetable parser. Examine this class timetable image carefully for Department '{dept}', Section '{sec}'.
+Extract the exact subject names from each table cell for each day of the week (Monday through Saturday).
+Rules:
+- Read every cell text verbatim (e.g., if a cell says 'Linear Integrated Circuits', use 'Linear Integrated Circuits'; do not cut words off).
+- If a subject or lab occupies two consecutive slots, include the subject name twice in that day's list.
+- Do NOT abbreviate unless the cell itself is abbreviated.
+- Exclude lunch breaks, intervals, and free hours.
+- Return ONLY a raw JSON object with this exact structure:
+{{
+  "Monday": ["Exact Subject 1", "Exact Subject 2"],
+  "Tuesday": ["Exact Subject 1", "Exact Subject 2"],
+  "Wednesday": [],
+  "Thursday": [],
+  "Friday": [],
+  "Saturday": []
+}}"""
+
   req_body = {
       "contents": [{
           "parts": [
               {"text": prompt},
-              {"inlineData": {"mimeType": "image/jpeg", "data": image_b64}},
+              {"inline_data": {"mime_type": "image/jpeg", "data": image_b64}},
           ]
       }],
-      "generationConfig": {"responseMimeType": "application/json"},
+      "generationConfig": {
+          "responseMimeType": "application/json",
+      },
   }
 
   url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
@@ -1027,33 +1007,30 @@ def extract_with_gemini(image_b64, dept, sec):
     headers["x-goog-api-key"] = GEMINI_API_KEY
     headers["Authorization"] = f"Bearer {GEMINI_API_KEY}"
 
-  parsed_tt = None
-  try:
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(req_body).encode("utf-8"),
-        headers=headers,
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=15) as resp:
-      data = json.loads(resp.read().decode("utf-8"))
-      parsed_tt = json.loads(
-          data["candidates"][0]["content"]["parts"][0]["text"]
-      ).get("timetable", None)
-  except Exception as e:
-    print(f"Extraction fallback triggered: {e}")
-    parsed_tt = DEFAULT_SYLLABUS
-
-  dept_sec_key = f"{dept} - {sec}"
-  save_cached_section(
-      dept_sec_key,
-      {
-          "department": dept,
-          "section": sec,
-          "timetable": parsed_tt or DEFAULT_SYLLABUS,
-      },
+  req = urllib.request.Request(
+      url,
+      data=json.dumps(req_body).encode("utf-8"),
+      headers=headers,
+      method="POST",
   )
-  return parsed_tt or DEFAULT_SYLLABUS
+  try:
+    with urllib.request.urlopen(req, timeout=30) as resp:
+      data = json.loads(resp.read().decode("utf-8"))
+      raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
+      parsed = json.loads(raw_text)
+      parsed_tt = parsed.get("timetable", parsed)
+
+      dept_sec_key = f"{dept} - {sec}"
+      save_cached_section(
+          dept_sec_key,
+          {"department": dept, "section": sec, "timetable": parsed_tt},
+      )
+      return parsed_tt
+  except urllib.error.HTTPError as e:
+    err_body = e.read().decode("utf-8")
+    raise Exception(f"Google API Error ({e.code}): {err_body}")
+  except Exception as e:
+    raise Exception(f"Timetable parsing failed: {str(e)}")
 
 
 class AppHandler(BaseHTTPRequestHandler):
@@ -1078,11 +1055,17 @@ class AppHandler(BaseHTTPRequestHandler):
     if self.path == "/api/parse_timetable":
       dept = body.get("department", "ECE")
       sec = body.get("section", "Section C2")
-      timetable = extract_with_gemini(body.get("image_b64", ""), dept, sec)
-      self.send_response(200)
-      self.send_header("Content-type", "application/json")
-      self.end_headers()
-      self.wfile.write(json.dumps({"timetable": timetable}).encode("utf-8"))
+      try:
+        timetable = extract_with_gemini(body.get("image_b64", ""), dept, sec)
+        self.send_response(200)
+        self.send_header("Content-type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps({"timetable": timetable}).encode("utf-8"))
+      except Exception as e:
+        self.send_response(500)
+        self.send_header("Content-type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
 
 
 if __name__ == "__main__":
