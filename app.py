@@ -1001,11 +1001,12 @@ Rules:
       },
   }
 
-  url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
-  headers = {"Content-Type": "application/json"}
-  if GEMINI_API_KEY:
-    headers["x-goog-api-key"] = GEMINI_API_KEY
-    headers["Authorization"] = f"Bearer {GEMINI_API_KEY}"
+  key = GEMINI_API_KEY.strip()
+  url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={key}"
+  headers = {
+      "Content-Type": "application/json",
+      "x-goog-api-key": key,
+  }
 
   req = urllib.request.Request(
       url,
